@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "hvac-margin-rescue": {
+      "command": "node",
+      "args": ["D:/Projects/Hackathon-5/mcp-server/src/index.js"],
+      "description": "HVAC construction portfolio data — margins, billing, labor, RFIs, field notes"
+    }
+  }
+}

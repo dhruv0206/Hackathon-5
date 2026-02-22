@@ -1,142 +1,139 @@
 export interface Contract {
   project_id: string
   project_name: string
-  general_contractor: string
-  contract_value: number
-  start_date: string
-  substantial_completion: string
-  final_completion: string
-  retention_percentage: number
+  original_contract_value: number
+  contract_date: string
+  substantial_completion_date: string
+  retention_pct: number
   payment_terms: string
+  gc_name: string
+  architect: string
+  engineer_of_record: string
 }
 
 export interface SOVItem {
   project_id: string
   sov_line_id: string
+  line_number: number
   description: string
-  total_amount: number
-  labor_amount: number
-  material_amount: number
-  equipment_amount: number
-  phase: string
-  csi_code: string
+  scheduled_value: number
+  labor_pct: number
+  material_pct: number
 }
 
 export interface SOVBudget {
   project_id: string
   sov_line_id: string
-  description: string
-  budgeted_labor_hours: number
-  budgeted_labor_cost: number
-  budgeted_material_cost: number
-  budgeted_equipment_cost: number
-  estimated_productivity: number
-  risk_factor: number
+  estimated_labor_hours: number
+  estimated_labor_cost: number
+  estimated_material_cost: number
+  estimated_equipment_cost: number
+  estimated_sub_cost: number
+  productivity_factor: number
+  key_assumptions: string
 }
 
 export interface LaborLog {
-  log_id: string
   project_id: string
-  sov_line_id: string
+  log_id: string
   date: string
-  crew_id: string
-  worker_name: string
-  trade: string
-  hours: number
+  employee_id: string
+  role: string
+  sov_line_id: string
+  hours_st: number
+  hours_ot: number
   hourly_rate: number
   burden_multiplier: number
-  overtime_flag: string
-  notes: string
+  work_area: string
+  cost_code: number
 }
 
 export interface MaterialDelivery {
-  delivery_id: string
   project_id: string
-  sov_line_id: string
+  delivery_id: string
   date: string
-  vendor: string
-  description: string
+  sov_line_id: string
+  material_category: string
+  item_description: string
   quantity: number
+  unit: string
   unit_cost: number
   total_cost: number
   po_number: string
-  condition_on_arrival: string
+  vendor: string
+  received_by: string
+  condition_notes: string
 }
 
 export interface BillingHistory {
-  billing_id: string
   project_id: string
-  billing_period: string
-  application_date: string
-  amount_billed: number
-  retention_held: number
-  amount_due: number
-  payment_received_date: string
+  application_number: number
+  period_end: string
+  period_total: number
   cumulative_billed: number
-  cumulative_retained: number
-  percent_complete: number
+  retention_held: number
+  net_payment_due: number
   status: string
+  payment_date: string
+  line_item_count: number
 }
 
 export interface BillingLineItem {
-  billing_line_id: string
-  billing_id: string
-  project_id: string
   sov_line_id: string
   description: string
   scheduled_value: number
-  work_completed_this_period: number
-  materials_stored: number
-  total_completed_and_stored: number
-  percent_complete: number
+  previous_billed: number
+  this_period: number
+  total_billed: number
+  pct_complete: number
   balance_to_finish: number
+  project_id: string
+  application_number: number
 }
 
 export interface ChangeOrder {
-  co_id: string
   project_id: string
   co_number: string
-  description: string
-  requested_date: string
-  status: string
-  amount: number
-  labor_impact_hours: number
-  material_cost_impact: number
-  schedule_impact_days: number
-  approved_date: string
+  date_submitted: string
   reason_category: string
+  description: string
+  amount: number
+  status: string
+  related_rfi: string
+  affected_sov_lines: string
+  labor_hours_impact: number
+  schedule_impact_days: number
+  submitted_by: string
+  approved_by: string
 }
 
 export interface RFI {
-  rfi_id: string
   project_id: string
   rfi_number: string
+  date_submitted: string
   subject: string
-  submitted_date: string
   submitted_by: string
   assigned_to: string
-  status: string
   priority: string
-  description: string
-  response: string
-  response_date: string
-  cost_impact: string
-  schedule_impact: string
-  related_sov_lines: string
+  status: string
+  date_required: string
+  date_responded: string
+  response_summary: string
+  cost_impact: string | boolean
+  schedule_impact: string | boolean
 }
 
 export interface FieldNote {
-  note_id: string
   project_id: string
+  note_id: string
   date: string
   author: string
   note_type: string
-  sov_line_id: string
-  summary: string
-  details: string
+  content: string
+  photos_attached: number
   weather: string
-  crew_size: number
-  issues: string
+  temp_high: number
+  temp_low: number
 }
 
 export interface ProjectData {

@@ -5,35 +5,38 @@ import {
   getContract,
   getSOVByProject,
   getSOVBudgetByProject,
-  getLaborLogsByProject,
-  getLaborLogsBySOVLine,
-  getMaterialDeliveriesByProject,
   getBillingHistoryByProject,
   getBillingLineItemsByProject,
   getChangeOrdersByProject,
   getRFIsByProject,
-  getFieldNotesByProject,
-  getFieldNotesBySOVLine,
+  searchFieldNotesByKeywords,
   getProjectSummary,
+  getMarginAnalysisByProject,
+  getLaborProductivityByProject,
 } from '../data/queries'
+
+function isTruthy(val: string | boolean | undefined): boolean {
+  return val === true || val === 'True' || val === 'true'
+}
 
 export const tools = {
   getPortfolioOverview: tool({
-    description: 'Get overview of all 5 HVAC projects in the portfolio including contract values, completion status, and high-level metrics',
+    description:
+      'Get overview of all 5 HVAC projects in the portfolio including contract values, completion status, and high-level risk metrics. Always call this first for any portfolio-wide question.',
     parameters: z.object({}),
     execute: async () => {
       const contracts = getContracts()
-      return contracts.map(contract => {
+      return contracts.map((contract) => {
         const summary = getProjectSummary(contract.project_id)
         return {
           projectId: contract.project_id,
           projectName: contract.project_name,
-          generalContractor: contract.general_contractor,
-          contractValue: contract.contract_value,
-          startDate: contract.start_date,
-          substantialCompletion: contract.substantial_completion,
+          generalContractor: contract.gc_name,
+          contractValue: contract.original_contract_value,
+          substantialCompletion: contract.substantial_completion_date,
           percentComplete: summary.percentComplete,
           cumulativeBilled: summary.cumulativeBilled,
+          retentionHeld: summary.retentionHeld,
           approvedCOs: summary.approvedCOsCount,
           approvedCOsAmount: summary.approvedCOsAmount,
           pendingCOs: summary.pendingCOsCount,
@@ -45,7 +48,8 @@ export const tools = {
   }),
 
   getProjectDetails: tool({
-    description: 'Get detailed information about a specific project including contract terms, SOV breakdown, and current status',
+    description:
+      'Get contract terms and SOV line-item breakdown for a specific project. Only call this when the user explicitly asks for contract details or an SOV breakdown — do NOT call this during general portfolio analysis.',
     parameters: z.object({
       projectId: z.string().describe('The project ID (e.g., PRJ-2024-001)'),
     }),
@@ -53,306 +57,327 @@ export const tools = {
       const contract = getContract(projectId)
       const sov = getSOVByProject(projectId)
       const summary = getProjectSummary(projectId)
-      
-      return {
-        contract,
-        sovItems: sov,
-        summary,
-      }
+      return { contract, sovItems: sov, summary }
     },
   }),
 
   analyzeMargins: tool({
-    description: 'Analyze profit margins for a project by comparing budgeted vs actual costs for labor and materials. Identifies cost overruns and margin erosion.',
+    description:
+      'Analyze profit margins for a project by comparing budgeted vs actual labor and material costs per SOV line. Uses SQL aggregation over 16K labor records — identifies exactly where margin is being lost and by how much.',
     parameters: z.object({
       projectId: z.string().describe('The project ID to analyze'),
     }),
     execute: async ({ projectId }) => {
-      const sov = getSOVByProject(projectId)
-      const sovBudget = getSOVBudgetByProject(projectId)
-      const laborLogs = getLaborLogsByProject(projectId)
-      const materials = getMaterialDeliveriesByProject(projectId)
-      
-      const analysis = sov.map(sovItem => {
-        const budget = sovBudget.find(b => b.sov_line_id === sovItem.sov_line_id)
-        const laborForLine = laborLogs.filter(l => l.sov_line_id === sovItem.sov_line_id)
-        const materialsForLine = materials.filter(m => m.sov_line_id === sovItem.sov_line_id)
-        
-        const actualLaborCost = laborForLine.reduce((sum, log) => {
-          return sum + (log.hours * log.hourly_rate * log.burden_multiplier)
-        }, 0)
-        
-        const actualMaterialCost = materialsForLine.reduce((sum, m) => sum + m.total_cost, 0)
-        
-        const budgetedLaborCost = budget?.budgeted_labor_cost || 0
-        const budgetedMaterialCost = budget?.budgeted_material_cost || 0
-        
-        const laborVariance = actualLaborCost - budgetedLaborCost
-        const materialVariance = actualMaterialCost - budgetedMaterialCost
+      const rows = getMarginAnalysisByProject(projectId)
+
+      const analysis = rows.map((r) => {
+        const laborVariance = r.actual_labor_cost - r.estimated_labor_cost
+        const materialVariance = r.actual_material_cost - r.estimated_material_cost
         const totalVariance = laborVariance + materialVariance
-        
-        const laborVariancePercent = budgetedLaborCost > 0 
-          ? (laborVariance / budgetedLaborCost) * 100 
-          : 0
-        const materialVariancePercent = budgetedMaterialCost > 0
-          ? (materialVariance / budgetedMaterialCost) * 100
-          : 0
-        
+
         return {
-          sovLineId: sovItem.sov_line_id,
-          description: sovItem.description,
-          budgetedLabor: budgetedLaborCost,
-          actualLabor: actualLaborCost,
-          laborVariance,
-          laborVariancePercent,
-          budgetedMaterial: budgetedMaterialCost,
-          actualMaterial: actualMaterialCost,
-          materialVariance,
-          materialVariancePercent,
-          totalVariance,
-          budgetedHours: budget?.budgeted_labor_hours || 0,
-          actualHours: laborForLine.reduce((sum, l) => sum + l.hours, 0),
+          sovLineId: r.sov_line_id,
+          description: r.description,
+          scheduledValue: r.scheduled_value,
+          budgetedLaborHours: r.estimated_labor_hours,
+          actualLaborHours: Math.round(r.actual_labor_hours),
+          hoursVariance: Math.round(r.actual_labor_hours - r.estimated_labor_hours),
+          budgetedLaborCost: r.estimated_labor_cost,
+          actualLaborCost: Math.round(r.actual_labor_cost),
+          laborVariance: Math.round(laborVariance),
+          laborVariancePct:
+            r.estimated_labor_cost > 0
+              ? Math.round((laborVariance / r.estimated_labor_cost) * 1000) / 10
+              : 0,
+          budgetedMaterialCost: r.estimated_material_cost,
+          actualMaterialCost: Math.round(r.actual_material_cost),
+          materialVariance: Math.round(materialVariance),
+          totalVariance: Math.round(totalVariance),
+          productivityFactor: r.productivity_factor,
         }
       })
-      
-      const totalBudgetedCost = analysis.reduce((sum, a) => sum + a.budgetedLabor + a.budgetedMaterial, 0)
-      const totalActualCost = analysis.reduce((sum, a) => sum + a.actualLabor + a.actualMaterial, 0)
-      const totalVariance = totalActualCost - totalBudgetedCost
-      
+
+      const significant = analysis.filter((a) => Math.abs(a.totalVariance) > 1000)
+      const totalBudgeted = analysis.reduce(
+        (s, a) => s + a.budgetedLaborCost + a.budgetedMaterialCost,
+        0
+      )
+      const totalActual = analysis.reduce(
+        (s, a) => s + a.actualLaborCost + a.actualMaterialCost,
+        0
+      )
+      const totalVariance = totalActual - totalBudgeted
+
       return {
         projectId,
-        lineItemAnalysis: analysis.filter(a => Math.abs(a.totalVariance) > 100),
+        lineItemAnalysis: significant.sort((a, b) => b.totalVariance - a.totalVariance),
         summary: {
-          totalBudgetedCost,
-          totalActualCost,
-          totalVariance,
-          variancePercent: (totalVariance / totalBudgetedCost) * 100,
+          totalBudgetedCost: Math.round(totalBudgeted),
+          totalActualCost: Math.round(totalActual),
+          totalVariance: Math.round(totalVariance),
+          variancePct:
+            totalBudgeted > 0
+              ? Math.round((totalVariance / totalBudgeted) * 1000) / 10
+              : 0,
         },
       }
     },
   }),
 
   analyzeLaborProductivity: tool({
-    description: 'Analyze labor productivity by comparing actual hours vs budgeted hours. Identifies inefficiencies and overtime patterns.',
+    description:
+      'Analyze labor productivity: actual vs budgeted hours, overtime patterns, and cost per SOV line. Identifies crew inefficiency and schedule pressure.',
     parameters: z.object({
       projectId: z.string().describe('The project ID to analyze'),
-      sovLineId: z.string().optional().describe('Optional: analyze a specific SOV line item'),
     }),
-    execute: async ({ projectId, sovLineId }) => {
-      const sovBudget = getSOVBudgetByProject(projectId)
-      const laborLogs = sovLineId 
-        ? getLaborLogsBySOVLine(projectId, sovLineId)
-        : getLaborLogsByProject(projectId)
-      
-      const analysis = sovBudget.map(budget => {
-        const logsForLine = sovLineId
-          ? laborLogs
-          : laborLogs.filter(l => l.sov_line_id === budget.sov_line_id)
-        
-        const actualHours = logsForLine.reduce((sum, l) => sum + l.hours, 0)
-        const overtimeHours = logsForLine.filter(l => l.overtime_flag === 'Yes').reduce((sum, l) => sum + l.hours, 0)
-        const budgetedHours = budget.budgeted_labor_hours
-        
-        const hoursVariance = actualHours - budgetedHours
-        const hoursVariancePercent = budgetedHours > 0 ? (hoursVariance / budgetedHours) * 100 : 0
-        const overtimePercent = actualHours > 0 ? (overtimeHours / actualHours) * 100 : 0
-        
-        const actualProductivity = actualHours > 0 ? actualHours / (logsForLine.length || 1) : 0
-        const estimatedProductivity = budget.estimated_productivity
-        
-        return {
-          sovLineId: budget.sov_line_id,
-          description: budget.description,
-          budgetedHours,
-          actualHours,
-          hoursVariance,
-          hoursVariancePercent,
-          overtimeHours,
-          overtimePercent,
-          estimatedProductivity,
-          actualProductivity,
-          daysWorked: new Set(logsForLine.map(l => l.date)).size,
-          uniqueWorkers: new Set(logsForLine.map(l => l.worker_name)).size,
-        }
-      })
-      
+    execute: async ({ projectId }) => {
+      const rows = getLaborProductivityByProject(projectId)
+
+      const analysis = rows
+        .filter((r) => r.actual_hours_st + r.actual_hours_ot > 0)
+        .map((r) => {
+          const actualHours = r.actual_hours_st + r.actual_hours_ot
+          const hoursVariance = actualHours - r.estimated_labor_hours
+          const overtimePct =
+            actualHours > 0 ? Math.round((r.actual_hours_ot / actualHours) * 1000) / 10 : 0
+
+          return {
+            sovLineId: r.sov_line_id,
+            description: r.description,
+            budgetedHours: r.estimated_labor_hours,
+            actualHours,
+            straightTimeHours: r.actual_hours_st,
+            overtimeHours: r.actual_hours_ot,
+            overtimePct,
+            hoursVariance,
+            hoursVariancePct:
+              r.estimated_labor_hours > 0
+                ? Math.round((hoursVariance / r.estimated_labor_hours) * 1000) / 10
+                : 0,
+            budgetedLaborCost: r.estimated_labor_cost,
+            actualLaborCost: Math.round(r.actual_labor_cost),
+            productivityFactor: r.productivity_factor,
+            uniqueEmployees: r.unique_employees,
+          }
+        })
+
       return {
         projectId,
-        sovLineId,
-        analysis: analysis.filter(a => a.actualHours > 0),
+        analysis,
+        overtimeSummary: {
+          totalSTHours: analysis.reduce((s, a) => s + a.straightTimeHours, 0),
+          totalOTHours: analysis.reduce((s, a) => s + a.overtimeHours, 0),
+          avgOvertimePct:
+            analysis.length > 0
+              ? Math.round(
+                  (analysis.reduce((s, a) => s + a.overtimePct, 0) / analysis.length) * 10
+                ) / 10
+              : 0,
+          linesOverBudget: analysis.filter((a) => a.hoursVariance > 0).length,
+        },
       }
     },
   }),
 
   getChangeOrderStatus: tool({
-    description: 'Get status of change orders including pending approvals and their financial impact. Critical for identifying unbilled work.',
+    description:
+      'Get all change orders for a project with financial and schedule impacts. Critical for finding unbilled approved work and pending revenue.',
     parameters: z.object({
       projectId: z.string().describe('The project ID'),
-      status: z.enum(['Approved', 'Pending', 'Rejected', 'All']).optional().describe('Filter by status'),
+      status: z
+        .enum(['Approved', 'Pending', 'Rejected', 'All'])
+        .optional()
+        .describe('Filter by status'),
     }),
     execute: async ({ projectId, status = 'All' }) => {
       let changeOrders = getChangeOrdersByProject(projectId)
-      
-      if (status !== 'All') {
-        changeOrders = changeOrders.filter(co => co.status === status)
-      }
-      
-      const summary = {
-        total: changeOrders.length,
-        approved: changeOrders.filter(co => co.status === 'Approved').length,
-        pending: changeOrders.filter(co => co.status === 'Pending').length,
-        rejected: changeOrders.filter(co => co.status === 'Rejected').length,
-        approvedAmount: changeOrders.filter(co => co.status === 'Approved').reduce((sum, co) => sum + co.amount, 0),
-        pendingAmount: changeOrders.filter(co => co.status === 'Pending').reduce((sum, co) => sum + co.amount, 0),
-        totalLaborImpact: changeOrders.reduce((sum, co) => sum + co.labor_impact_hours, 0),
-        totalScheduleImpact: changeOrders.reduce((sum, co) => sum + co.schedule_impact_days, 0),
-      }
-      
+      if (status !== 'All') changeOrders = changeOrders.filter((co) => co.status === status)
+
+      const approved = changeOrders.filter((co) => co.status === 'Approved')
+      const pending = changeOrders.filter((co) => co.status === 'Pending')
+      const rejected = changeOrders.filter((co) => co.status === 'Rejected')
+
       return {
         projectId,
         changeOrders,
-        summary,
+        summary: {
+          total: changeOrders.length,
+          approvedCount: approved.length,
+          approvedAmount: approved.reduce((s, co) => s + co.amount, 0),
+          pendingCount: pending.length,
+          pendingAmount: pending.reduce((s, co) => s + co.amount, 0),
+          rejectedCount: rejected.length,
+          rejectedAmount: rejected.reduce((s, co) => s + co.amount, 0),
+          totalLaborHoursImpact: changeOrders.reduce((s, co) => s + co.labor_hours_impact, 0),
+          totalScheduleImpactDays: changeOrders.reduce((s, co) => s + co.schedule_impact_days, 0),
+        },
       }
     },
   }),
 
   getBillingStatus: tool({
-    description: 'Analyze billing history and identify billing lags or retention issues. Shows what work has been completed but not yet billed.',
+    description:
+      'Analyze billing history: cumulative billed vs contract value, retention held, unpaid applications, and SOV lines with unbilled completed work.',
     parameters: z.object({
       projectId: z.string().describe('The project ID'),
     }),
     execute: async ({ projectId }) => {
-      const billingHistory = getBillingHistoryByProject(projectId)
+      const contract = getContract(projectId)
+      const billingHistory = getBillingHistoryByProject(projectId).reverse() // latest first
       const billingLineItems = getBillingLineItemsByProject(projectId)
       const sov = getSOVByProject(projectId)
-      
-      const latestBilling = billingHistory.sort(
-        (a, b) => new Date(b.application_date).getTime() - new Date(a.application_date).getTime()
-      )[0]
-      
-      const unbilledWork = sov.map(sovItem => {
-        const lineItemsForSOV = billingLineItems.filter(b => b.sov_line_id === sovItem.sov_line_id)
-        const totalBilled = lineItemsForSOV.reduce((sum, b) => sum + b.total_completed_and_stored, 0)
-        const unbilled = sovItem.total_amount - totalBilled
-        
+
+      const latestBilling = billingHistory[0]
+
+      const unbilledWork = sov.map((sovItem) => {
+        const latestLineItem = billingLineItems
+          .filter((b) => b.sov_line_id === sovItem.sov_line_id)
+          .sort((a, b) => b.application_number - a.application_number)[0]
+
+        const totalBilled = latestLineItem?.total_billed ?? 0
+        const pctComplete = latestLineItem?.pct_complete ?? 0
+
         return {
           sovLineId: sovItem.sov_line_id,
           description: sovItem.description,
-          scheduledValue: sovItem.total_amount,
+          scheduledValue: sovItem.scheduled_value,
           totalBilled,
-          unbilled,
-          percentBilled: (totalBilled / sovItem.total_amount) * 100,
+          pctComplete,
+          unbilled: Math.round(sovItem.scheduled_value - totalBilled),
+          balanceToFinish: latestLineItem?.balance_to_finish ?? sovItem.scheduled_value,
         }
       })
-      
-      const totalRetentionHeld = billingHistory.reduce((sum, b) => sum + b.retention_held, 0)
-      const totalBilled = billingHistory.reduce((sum, b) => sum + b.amount_billed, 0)
-      
+
+      const contractValue = contract?.original_contract_value ?? 0
+      const cumulativeBilled = latestBilling?.cumulative_billed ?? 0
+
       return {
         projectId,
+        contractValue,
         latestBilling,
-        billingHistory,
-        unbilledWork: unbilledWork.filter(u => u.unbilled > 1000),
+        recentApplications: billingHistory.slice(0, 5),
+        unbilledWork: unbilledWork.filter((u) => u.unbilled > 5000),
         summary: {
-          totalBilled,
-          totalRetentionHeld,
-          cumulativeBilled: latestBilling?.cumulative_billed || 0,
-          cumulativeRetained: latestBilling?.cumulative_retained || 0,
+          totalBilled: cumulativeBilled,
+          billingPct:
+            contractValue > 0
+              ? Math.round((cumulativeBilled / contractValue) * 1000) / 10
+              : 0,
+          retentionHeld: latestBilling?.retention_held ?? 0,
+          netPaymentDue: latestBilling?.net_payment_due ?? 0,
+          unpaidApplications: billingHistory.filter((b) => b.status !== 'Paid').length,
         },
       }
     },
   }),
 
   getRFIAnalysis: tool({
-    description: 'Analyze RFIs for cost and schedule impacts. Identifies high-priority open RFIs that may affect margins.',
+    description:
+      'Analyze RFIs for cost and schedule impacts. Open high-priority RFIs are a leading indicator of future change orders and margin exposure.',
     parameters: z.object({
       projectId: z.string().describe('The project ID'),
-      status: z.enum(['Open', 'In Review', 'Closed', 'All']).optional().describe('Filter by status'),
-      priority: z.enum(['High', 'Medium', 'Low', 'All']).optional().describe('Filter by priority'),
+      status: z.enum(['Open', 'Pending Response', 'Closed', 'All']).optional(),
+      priority: z.enum(['Critical', 'High', 'Medium', 'Low', 'All']).optional(),
     }),
     execute: async ({ projectId, status = 'All', priority = 'All' }) => {
       let rfis = getRFIsByProject(projectId)
-      
-      if (status !== 'All') {
-        rfis = rfis.filter(r => r.status === status)
-      }
-      
-      if (priority !== 'All') {
-        rfis = rfis.filter(r => r.priority === priority)
-      }
-      
-      const withCostImpact = rfis.filter(r => r.cost_impact === 'Yes')
-      const withScheduleImpact = rfis.filter(r => r.schedule_impact === 'Yes')
-      const highPriorityOpen = rfis.filter(r => r.priority === 'High' && (r.status === 'Open' || r.status === 'In Review'))
-      
+      if (status !== 'All') rfis = rfis.filter((r) => r.status === status)
+      if (priority !== 'All') rfis = rfis.filter((r) => r.priority === priority)
+
+      const withCostImpact = rfis.filter((r) => isTruthy(r.cost_impact))
+      const withScheduleImpact = rfis.filter((r) => isTruthy(r.schedule_impact))
+      const openHighPriority = rfis.filter(
+        (r) =>
+          (r.priority === 'High' || r.priority === 'Critical') &&
+          (r.status === 'Open' || r.status === 'Pending Response')
+      )
+
       return {
         projectId,
         rfis,
         summary: {
           total: rfis.length,
-          open: rfis.filter(r => r.status === 'Open').length,
-          inReview: rfis.filter(r => r.status === 'In Review').length,
-          closed: rfis.filter(r => r.status === 'Closed').length,
+          open: rfis.filter((r) => r.status === 'Open').length,
+          pendingResponse: rfis.filter((r) => r.status === 'Pending Response').length,
+          closed: rfis.filter((r) => r.status === 'Closed').length,
           withCostImpact: withCostImpact.length,
           withScheduleImpact: withScheduleImpact.length,
-          highPriorityOpen: highPriorityOpen.length,
+          openHighOrCritical: openHighPriority.length,
         },
-        highPriorityOpen,
+        openHighPriorityRFIs: openHighPriority,
       }
     },
   }),
 
   searchFieldNotes: tool({
-    description: 'Search field notes for specific issues, delays, or problems. Useful for understanding context behind cost overruns.',
+    description:
+      'Search unstructured daily field notes for specific issues, verbal approvals, delays, or rework. Useful for understanding the narrative behind cost overruns.',
     parameters: z.object({
       projectId: z.string().describe('The project ID'),
-      sovLineId: z.string().optional().describe('Optional: filter by SOV line'),
-      keywords: z.string().describe('Keywords to search for in notes (e.g., "delay", "issue", "rework")'),
+      keywords: z
+        .string()
+        .describe('Space-separated keywords to search for (e.g., "delay rework verbal approval")'),
+      noteType: z
+        .enum(['Daily Report', 'Issue Log', 'Safety Log', 'Inspection Note', 'Coordination Note', 'All'])
+        .optional(),
     }),
-    execute: async ({ projectId, sovLineId, keywords }) => {
-      let fieldNotes = sovLineId
-        ? getFieldNotesBySOVLine(projectId, sovLineId)
-        : getFieldNotesByProject(projectId)
-      
-      const keywordLower = keywords.toLowerCase()
-      const matchingNotes = fieldNotes.filter(note => {
-        const searchText = `${note.summary} ${note.details} ${note.issues}`.toLowerCase()
-        return searchText.includes(keywordLower)
-      })
-      
+    execute: async ({ projectId, keywords, noteType = 'All' }) => {
+      const terms = keywords.toLowerCase().split(/\s+/).filter(Boolean)
+      const matches = searchFieldNotesByKeywords(projectId, terms, noteType)
+
       return {
         projectId,
-        sovLineId,
         keywords,
-        totalNotes: fieldNotes.length,
-        matchingNotes: matchingNotes.slice(0, 50),
+        matchCount: matches.length,
+        matchingNotes: matches.map((n) => ({
+          date: n.date,
+          author: n.author,
+          noteType: n.note_type,
+          snippet: n.snippet,
+        })),
       }
     },
   }),
 
   getProjectRiskFactors: tool({
-    description: 'Identify high-risk areas of a project based on budget risk factors, cost variances, and open issues.',
+    description:
+      'Identify high-risk SOV lines based on low productivity factors at bid time, pending change orders, and open high-priority RFIs. Gives a ranked risk view.',
     parameters: z.object({
       projectId: z.string().describe('The project ID'),
     }),
     execute: async ({ projectId }) => {
+      const sov = getSOVByProject(projectId)
       const sovBudget = getSOVBudgetByProject(projectId)
       const changeOrders = getChangeOrdersByProject(projectId)
       const rfis = getRFIsByProject(projectId)
-      
-      const highRiskItems = sovBudget.filter(b => b.risk_factor > 1.2)
-      const pendingCOs = changeOrders.filter(co => co.status === 'Pending')
-      const highPriorityRFIs = rfis.filter(r => r.priority === 'High' && r.status !== 'Closed')
-      
+
+      const riskyLines = sovBudget
+        .filter((b) => b.productivity_factor < 1.0)
+        .map((b) => ({
+          sovLineId: b.sov_line_id,
+          description: sov.find((s) => s.sov_line_id === b.sov_line_id)?.description ?? b.sov_line_id,
+          productivityFactor: b.productivity_factor,
+          estimatedLaborCost: b.estimated_labor_cost,
+          keyAssumptions: b.key_assumptions,
+        }))
+        .sort((a, b) => a.productivityFactor - b.productivityFactor)
+
+      const pendingCOs = changeOrders.filter((co) => co.status === 'Pending')
+      const openHighRFIs = rfis.filter(
+        (r) =>
+          (r.priority === 'High' || r.priority === 'Critical') &&
+          (r.status === 'Open' || r.status === 'Pending Response')
+      )
+
       return {
         projectId,
-        highRiskSOVItems: highRiskItems,
+        riskySOVLines: riskyLines,
         pendingChangeOrders: pendingCOs,
-        highPriorityOpenRFIs: highPriorityRFIs,
+        openHighPriorityRFIs: openHighRFIs,
         summary: {
-          highRiskItemsCount: highRiskItems.length,
-          pendingCOsAmount: pendingCOs.reduce((sum, co) => sum + co.amount, 0),
-          criticalRFIsCount: highPriorityRFIs.length,
+          riskyLineCount: riskyLines.length,
+          pendingCOsAmount: pendingCOs.reduce((s, co) => s + co.amount, 0),
+          openHighRFICount: openHighRFIs.length,
         },
       }
     },
