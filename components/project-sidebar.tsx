@@ -33,7 +33,7 @@ export function ProjectSidebar({ selectedProject, onSelectProject }: ProjectSide
     fetch('/api/projects')
       .then(res => res.json())
       .then(data => {
-        setProjects(data)
+        setProjects(Array.isArray(data) ? data : [])
         setLoading(false)
       })
       .catch(err => {

@@ -1,11 +1,11 @@
-import { createAnthropic } from '@ai-sdk/anthropic'
+import { createGoogleGenerativeAI } from '@ai-sdk/google'
 import { streamText } from 'ai'
 import { tools } from '@/lib/ai/tools'
 
 export const maxDuration = 120
 
-const anthropic = createAnthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
+const google = createGoogleGenerativeAI({
+  apiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY,
 })
 
 const SYSTEM_PROMPT = `You are the Margin Rescue Agent — an autonomous AI CFO assistant for a $50M/year commercial HVAC contractor.
@@ -63,7 +63,7 @@ export async function POST(req: Request) {
   const { messages } = await req.json()
 
   const result = await streamText({
-    model: anthropic('claude-sonnet-4-6'),
+    model: google('gemini-2.5-pro'),
     messages,
     tools,
     maxSteps: 5,

@@ -10,7 +10,7 @@
     "seed-db": "node scripts/seed-db.js"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^1.0.0",
+    "@ai-sdk/google": "^1.2.22",
     "@ai-sdk/react": "^1.0.0",
     "@radix-ui/react-progress": "^1.1.8",
     "ai": "^4.0.0",
