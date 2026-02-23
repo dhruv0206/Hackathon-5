@@ -1,7 +1,12 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "npm run seed-db && npm run build",
+  "buildCommand": "npm run seed-db && ls -la hvac_data.db && npm run build && cp hvac_data.db .next/server/hvac_data.db",
   "framework": "nextjs",
   "installCommand": "npm install",
-  "regions": ["iad1"]
+  "regions": ["iad1"],
+  "functions": {
+    "app/api/**/*.ts": {
+      "includeFiles": "hvac_data.db"
+    }
+  }
 }
