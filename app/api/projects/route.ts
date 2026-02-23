@@ -26,7 +26,8 @@ export async function GET() {
 
     return NextResponse.json(projectsOverview)
   } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error)
     console.error('[v0] Error loading projects:', error)
-    return NextResponse.json({ error: 'Failed to load projects' }, { status: 500 })
+    return NextResponse.json({ error: 'Failed to load projects', detail: msg }, { status: 500 })
   }
 }
